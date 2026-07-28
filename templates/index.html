@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Measles Outbreak Predictor</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    body {
+      font-family: monospace;
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 0 20px;
+      background: white;
+      color: black;
+    }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    p.sub { color: #555; margin-bottom: 30px; }
+    hr { border: none; border-top: 1px solid #ccc; margin: 24px 0; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 24px; }
+    td, th { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }
+    th { background: #f0f0f0; }
+    .forecast-row { display: flex; gap: 40px; margin-bottom: 24px; }
+    .forecast-block { flex: 1; }
+    .forecast-block h3 { margin: 0 0 8px; font-size: 14px; }
+    .big { font-size: 32px; font-weight: bold; }
+    .risk-low    { color: green; }
+    .risk-medium { color: orange; }
+    .risk-high   { color: red; }
+    .chart-container { height: 280px; }
+    .disclaimer { font-size: 11px; color: #777; margin-top: 24px; }
+  </style>
+</head>
+<body>
+
+  <h1>Measles Outbreak Predictor</h1>
+  <p class="sub">ML-powered 4-week forecast and outbreak risk classification using JHU + CDC data</p>
+
+  <hr>
+
+  <h2>Summary</h2>
+  <table>
+    <tr><th>Metric</th><th>Value</th></tr>
+    <tr><td>2025 total cases</td><td id="s-2025">Loading...</td></tr>
+    <tr><td>2026 total cases</td><td id="s-2026">Loading...</td></tr>
+    <tr><td>Last 4 weeks</td><td id="s-4w">Loading...</td></tr>
+    <tr><td>MMR vaccination rate</td><td id="s-vax">Loading...</td></tr>
+  </table>
+
+  <hr>
+
+  <h2>4-Week Forecast</h2>
+  <div class="forecast-row">
+    <div class="forecast-block">
+      <h3>Predicted cases (next 4 weeks)</h3>
+      <div class="big" id="f-cases">—</div>
+      <div id="f-asof" style="font-size:12px; color:#555; margin-top:4px;"></div>
+      <p style="font-size:12px; margin-top:8px;">XGBoost regression model trained on lag features, rolling averages, seasonal patterns, and vaccination coverage.</p>
+    </div>
+
+    <div class="forecast-block">
+      <h3>Outbreak risk level</h3>
+      <div class="big" id="f-risk">—</div>
+      <p style="font-size:12px; margin-top:8px;">Random Forest classifier. Thresholds based on predicted 4-week case count:</p>
+      <table style="font-size:12px; margin-top:4px;">
+        <tr><th>Risk</th><th>Cases (next 4 weeks)</th><th>Probability</th></tr>
+        <tr><td class="risk-low">Low</td><td>0 – 10</td><td id="p-low">—</td></tr>
+        <tr><td class="risk-medium">Medium</td><td>11 – 50</td><td id="p-medium">—</td></tr>
+        <tr><td class="risk-high">High</td><td>51+</td><td id="p-high">—</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <hr>
+
+  <h2>Historical Weekly Cases (2010–2026)</h2>
+  <div class="chart-container">
+    <canvas id="chart"></canvas>
+  </div>
+
+  <p class="disclaimer">
+    2025–2026 data: JHU CSSE Measles Tracking Team (updated weekly, CC BY 4.0).<br>
+    2010–2024 data: CDC annual totals distributed using seasonal model.<br>
+    Models trained with time-series cross-validation to prevent data leakage.
+  </p>
+
+<script>
+async function loadSummary() {
+  const d = await fetch("/api/summary").then(r => r.json());
+  document.getElementById("s-2025").textContent = d.total_2025.toLocaleString();
+  document.getElementById("s-2026").textContent = d.total_2026.toLocaleString();
+  document.getElementById("s-4w").textContent = d.latest_4w_cases.toLocaleString();
+  document.getElementById("s-vax").textContent = d.vax_rate + "%";
+}
+
+async function loadForecast() {
+  const d = await fetch("/api/forecast").then(r => r.json());
+  if (d.error) { document.getElementById("f-cases").textContent = "Error"; return; }
+
+  document.getElementById("f-cases").textContent = d.predicted_cases_4w.toLocaleString();
+  document.getElementById("f-asof").textContent = "As of week ending " + d.as_of;
+
+  const riskEl = document.getElementById("f-risk");
+  riskEl.textContent = d.risk;
+  riskEl.className = "big risk-" + d.risk.toLowerCase();
+
+  document.getElementById("p-low").textContent    = d.risk_proba.Low + "%";
+  document.getElementById("p-medium").textContent = d.risk_proba.Medium + "%";
+  document.getElementById("p-high").textContent   = d.risk_proba.High + "%";
+}
+
+async function loadChart() {
+  const d = await fetch("/api/historical").then(r => r.json());
+  new Chart(document.getElementById("chart"), {
+    type: "bar",
+    data: {
+      labels: d.labels,
+      datasets: [{
+        label: "Cases",
+        data: d.values,
+        backgroundColor: d.values.map(v =>
+          v > 200 ? "red" : v > 50 ? "orange" : "steelblue"
+        ),
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          ticks: {
+            callback: (_, i) => i % 6 === 0 ? d.labels[i] : "",
+            maxRotation: 45,
+            font: { size: 10, family: "monospace" }
+          },
+          grid: { display: false }
+        },
+        y: { ticks: { font: { size: 10, family: "monospace" } } }
+      }
+    }
+  });
+}
+
+loadSummary();
+loadForecast();
+loadChart();
+</script>
+</body>
+</html>
